@@ -44,7 +44,8 @@ xelatex example.tex
 -   **Image Processing** (lines 232-265): Convert EMF vector images to PDF using
     `inkscape`.
 -   **Enhanced LaTeX Generation** (lines 268-626): Create sophisticated Beamer
-    theme files with corporate-grade styling and intelligent font handling.
+    theme files with corporate-grade styling, intelligent font handling, and
+    integrated frame title/subtitle templates.
 -   **Conversion Reporting** (lines 627-695): Generate detailed
     `CONVERSION_NOTES.md` documenting extraction results and manual adjustment
     recommendations.
@@ -128,6 +129,31 @@ Uses sophisticated heuristics to identify background images:
 -   Also provides a `\clearbackground` command to remove them.
 -   Available background images are listed in comments in the `beameroutertheme`
     and `example.tex` files.
+
+### Frame Title & Subtitle Template Integration
+
+The script generates frame templates that handle both titles and subtitles:
+
+**Technical Implementation:**
+
+-   **Integrated Templates:** Uses `\defbeamertemplate{frametitle}[layoutname]` to create custom templates that handle both title and subtitle rendering in a single template
+-   **Conditional Subtitle Rendering:** Employs `\ifx\insertframesubtitle\@empty\else` logic to only render subtitles when present
+-   **Template Activation:** Automatically activates custom templates with `\setbeamertemplate{frametitle}[layoutname]` in layout environments
+-   **Placeholder Mapping:** Maps PowerPoint title placeholders (type 'title') to `\insertframetitle` and subtitle placeholders (type 'body' with accent1 color) to `\insertframesubtitle`
+-   **TikZ Positioning:** Uses precise coordinate mapping from PowerPoint EMU units to relative paper positions for accurate placement
+
+**Key Functions:**
+
+-   `generate_beamer_frame_template()`: Creates integrated frametitle templates with subtitle support
+-   Template activation in `generate_outer_theme()` environment definitions
+-   Color mapping for framesubtitle in `generate_color_theme()`
+-   Font definitions for framesubtitle in `generate_font_theme()`
+
+**Generated Example Usage:**
+
+-   Themes work with standard Beamer syntax: `\frametitle{Title}` and `\framesubtitle{Subtitle}`
+-   Requires running `lualatex` twice for proper template activation and rendering
+-   Supports multiple layout templates within the same theme
 
 ### Color Extraction Enhancement
 
