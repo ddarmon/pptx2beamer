@@ -10,8 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Running the Script
 ```bash
-python pptx2beamer.py template.pptx
-python pptx2beamer.py template.pptx -o mytheme
+python3 pptx2beamer.py template.pptx
+python3 pptx2beamer.py template.pptx -o mytheme
 ```
 
 ### Testing Generated Themes
