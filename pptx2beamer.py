@@ -286,23 +286,28 @@ def generate_font_theme(theme_dir, theme_name, fonts):
             f.write(r"\mode<all>")
             return
 
-        f.write("% Font theme uses default LaTeX fonts for compatibility\n")
-        f.write("% To use custom fonts, add fontspec configuration to your document preamble\n\n")
+        f.write("% Using actual fonts found in PowerPoint theme with OS-agnostic versions\n")
+        f.write("% Requires XeLaTeX or LuaLaTeX for font support\n\n")
+        f.write(r"\RequirePackage{fontspec}" + "\n\n")
 
-        # Document font suggestions in comments rather than executing font commands
+        # Use actual fonts with OS-agnostic fallbacks
         if 'major' in fonts:
             major_font, original_major = get_compatible_font(fonts['major'])
             if original_major:
-                f.write(f"% Original major font: '{original_major}' -> Suggested: '{major_font}'\n")
+                f.write(f"% Original major font: '{original_major}' -> Using: '{major_font}'\n")
+                f.write(f"\\setmainfont{{{major_font}}}[Ligatures=TeX]\n")
             else:
-                f.write(f"% Suggested major font: '{major_font}'\n")
+                f.write(f"% Using major font: '{major_font}'\n")
+                f.write(f"\\setmainfont{{{major_font}}}[Ligatures=TeX]\n")
 
         if 'minor' in fonts:
             minor_font, original_minor = get_compatible_font(fonts['minor'])
             if original_minor:
-                f.write(f"% Original minor font: '{original_minor}' -> Suggested: '{minor_font}'\n")
+                f.write(f"% Original minor font: '{original_minor}' -> Using: '{minor_font}'\n")
+                f.write(f"\\setsansfont{{{minor_font}}}[Ligatures=TeX]\n")
             else:
-                f.write(f"% Suggested minor font: '{minor_font}'\n")
+                f.write(f"% Using minor font: '{minor_font}'\n")
+                f.write(f"\\setsansfont{{{minor_font}}}[Ligatures=TeX]\n")
 
         f.write("\n% Beamer font settings\n")
         f.write(r"\setbeamerfont{normal text}{size=\normalsize}" + "\n")
