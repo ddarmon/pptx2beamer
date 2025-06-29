@@ -36,8 +36,10 @@ def parse_theme_xml(theme_path):
         print(f"Warning: Could not parse theme XML: {e}")
         return {}, {}
 
-    # Extract colors
+    # Extract colors - both scheme and custom colors
     colors = {}
+    
+    # Standard theme colors
     color_scheme = root.find('.//a:clrScheme', ns)
     if color_scheme:
         for color_element in color_scheme:
@@ -45,6 +47,13 @@ def parse_theme_xml(theme_path):
             srgb_color = color_element.find('a:srgbClr', ns)
             if srgb_color is not None:
                 colors[tag_name] = srgb_color.get('val')
+    
+    # Custom colors (often defined in theme extras)
+    custom_colors = root.findall('.//a:srgbClr', ns)
+    for i, custom_color in enumerate(custom_colors):
+        val = custom_color.get('val')
+        if val and val not in colors.values():
+            colors[f'custom{i+1}'] = val
 
     # Extract fonts
     fonts = {}
@@ -59,6 +68,94 @@ def parse_theme_xml(theme_path):
             fonts['minor'] = minor_font_element.get('typeface')
 
     return colors, fonts
+
+def extract_fonts_from_slides(ppt_dir):
+    """Extracts font information from actual slide content."""
+    fonts_found = set()
+    ns = {
+        'p': 'http://schemas.openxmlformats.org/presentationml/2006/main',
+        'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+        'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    }
+    
+    # Search in slides, masters, and layouts
+    search_dirs = [
+        ppt_dir / 'ppt' / 'slides',
+        ppt_dir / 'ppt' / 'slideMasters', 
+        ppt_dir / 'ppt' / 'slideLayouts'
+    ]
+    
+    for search_dir in search_dirs:
+        if not search_dir.exists():
+            continue
+            
+        for xml_file in search_dir.glob('*.xml'):
+            try:
+                tree = ET.parse(xml_file)
+                root = tree.getroot()
+                
+                # Look for font references in text runs
+                font_elements = root.findall('.//a:latin', ns)
+                for font_elem in font_elements:
+                    typeface = font_elem.get('typeface')
+                    if typeface:
+                        fonts_found.add(typeface)
+                        
+            except ET.ParseError:
+                continue
+    
+    return sorted(list(fonts_found))
+
+def parse_slide_master_styling(ppt_dir):
+    """Extracts title/footer styling information from slide masters."""
+    styling_info = {
+        'has_footer_elements': False,
+        'title_positioning': 'default',
+        'footer_elements': []
+    }
+    
+    ns = {
+        'p': 'http://schemas.openxmlformats.org/presentationml/2006/main',
+        'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+        'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    }
+    
+    masters_dir = ppt_dir / 'ppt' / 'slideMasters'
+    if not masters_dir.exists():
+        return styling_info
+    
+    for master_file in masters_dir.glob('*.xml'):
+        try:
+            tree = ET.parse(master_file)
+            root = tree.getroot()
+            
+            # Look for footer elements (rectangles, logos, etc.)
+            shapes = root.findall('.//p:sp', ns) + root.findall('.//p:pic', ns)
+            
+            for shape in shapes:
+                # Check position - if in bottom area of slide, likely footer
+                xfrm = shape.find('.//a:xfrm', ns)
+                if xfrm is not None:
+                    off = xfrm.find('a:off', ns)
+                    if off is not None:
+                        y = int(off.get('y', '0'))
+                        # If positioned in bottom 20% of slide (>5.5M EMU for standard slide)
+                        if y > 5500000:
+                            styling_info['has_footer_elements'] = True
+                            
+                            # Identify element type
+                            cNvPr = shape.find('.//p:cNvPr', ns)
+                            if cNvPr is not None:
+                                name = cNvPr.get('name', '').lower()
+                                if 'rectangle' in name:
+                                    styling_info['footer_elements'].append('background_rect')
+                                elif 'picture' in name or 'logo' in name:
+                                    styling_info['footer_elements'].append('logo')
+            
+        except ET.ParseError:
+            continue
+    
+    return styling_info
 
 def find_background_images(ppt_dir):
     """Finds background images from slide masters and layouts."""
@@ -256,7 +353,7 @@ def generate_color_theme(theme_dir, theme_name, colors):
 
         f.write("\n" + r"\mode<all>")
 
-def generate_font_theme(theme_dir, theme_name, fonts):
+def generate_font_theme(theme_dir, theme_name, fonts, slide_fonts=None):
     """Generates the beamerfonttheme file."""
     filepath = theme_dir / f"beamerfonttheme{theme_name}.sty"
 
@@ -267,7 +364,18 @@ def generate_font_theme(theme_dir, theme_name, fonts):
         'Times New Roman': 'Times',
         'Cambria': 'Times',
         'Segoe UI': 'Helvetica',
-        'Tahoma': 'Helvetica'
+        'Tahoma': 'Helvetica',
+        'GT America': 'Helvetica',
+        'GT America Regular': 'Helvetica',
+        'GT America Condensed': 'Helvetica Neue Condensed',
+        'Avenir': 'Helvetica',
+        'Avenir Next': 'Helvetica Neue',
+        'Proxima Nova': 'Helvetica',
+        'Montserrat': 'Helvetica',
+        'Open Sans': 'Helvetica',
+        'Source Sans Pro': 'Helvetica',
+        'Roboto': 'Helvetica',
+        'Lato': 'Helvetica'
     }
 
     def get_compatible_font(font_name):
@@ -280,34 +388,63 @@ def generate_font_theme(theme_dir, theme_name, fonts):
         f.write(f"% Font theme for {theme_name}\n")
         f.write(r"\mode<presentation>" + "\n\n")
 
-        if not fonts:
+        # Report all fonts found
+        if slide_fonts:
+            f.write("% Fonts found in slides: " + ", ".join(slide_fonts) + "\n")
+        
+        if fonts:
+            f.write("% Theme fonts: major=" + fonts.get('major', 'None') + ", minor=" + fonts.get('minor', 'None') + "\n")
+
+        if not fonts and not slide_fonts:
             f.write("% No fonts found in PowerPoint theme\n")
             f.write("% Using default Beamer fonts\n\n")
             f.write(r"\mode<all>")
             return
 
-        f.write("% Using actual fonts found in PowerPoint theme with OS-agnostic versions\n")
+        f.write("% Using fonts found in PowerPoint with OS-agnostic substitutions\n")
         f.write("% Requires XeLaTeX or LuaLaTeX for font support\n\n")
         f.write(r"\RequirePackage{fontspec}" + "\n\n")
+        
+        # Find the most commonly used font from slides
+        primary_font = None
+        if slide_fonts:
+            # Prioritize common corporate fonts
+            priority_fonts = ['GT America', 'Avenir', 'Proxima Nova', 'Helvetica', 'Arial']
+            for pf in priority_fonts:
+                for sf in slide_fonts:
+                    if pf.lower() in sf.lower():
+                        primary_font = sf
+                        break
+                if primary_font:
+                    break
+            if not primary_font:
+                primary_font = slide_fonts[0]
 
-        # Use actual fonts with OS-agnostic fallbacks
-        if 'major' in fonts:
-            major_font, original_major = get_compatible_font(fonts['major'])
-            if original_major:
-                f.write(f"% Original major font: '{original_major}' -> Using: '{major_font}'\n")
-                f.write(f"\\setmainfont{{{major_font}}}[Ligatures=TeX]\n")
-            else:
-                f.write(f"% Using major font: '{major_font}'\n")
-                f.write(f"\\setmainfont{{{major_font}}}[Ligatures=TeX]\n")
+        # Use primary font from slides if available, otherwise theme fonts
+        if primary_font:
+            primary_compatible, original_primary = get_compatible_font(primary_font)
+            f.write(f"% Primary font from slides: '{primary_font}' -> Using: '{primary_compatible}'\n")
+            f.write(f"\\setmainfont{{{primary_compatible}}}[Ligatures=TeX]\n")
+            f.write(f"\\setsansfont{{{primary_compatible}}}[Ligatures=TeX]\n")
+        else:
+            # Fall back to theme fonts
+            if 'major' in fonts:
+                major_font, original_major = get_compatible_font(fonts['major'])
+                if original_major:
+                    f.write(f"% Original major font: '{original_major}' -> Using: '{major_font}'\n")
+                    f.write(f"\\setmainfont{{{major_font}}}[Ligatures=TeX]\n")
+                else:
+                    f.write(f"% Using major font: '{major_font}'\n")
+                    f.write(f"\\setmainfont{{{major_font}}}[Ligatures=TeX]\n")
 
-        if 'minor' in fonts:
-            minor_font, original_minor = get_compatible_font(fonts['minor'])
-            if original_minor:
-                f.write(f"% Original minor font: '{original_minor}' -> Using: '{minor_font}'\n")
-                f.write(f"\\setsansfont{{{minor_font}}}[Ligatures=TeX]\n")
-            else:
-                f.write(f"% Using minor font: '{minor_font}'\n")
-                f.write(f"\\setsansfont{{{minor_font}}}[Ligatures=TeX]\n")
+            if 'minor' in fonts:
+                minor_font, original_minor = get_compatible_font(fonts['minor'])
+                if original_minor:
+                    f.write(f"% Original minor font: '{original_minor}' -> Using: '{minor_font}'\n")
+                    f.write(f"\\setsansfont{{{minor_font}}}[Ligatures=TeX]\n")
+                else:
+                    f.write(f"% Using minor font: '{minor_font}'\n")
+                    f.write(f"\\setsansfont{{{minor_font}}}[Ligatures=TeX]\n")
 
         f.write("\n% Beamer font settings\n")
         f.write(r"\setbeamerfont{normal text}{size=\normalsize}" + "\n")
@@ -317,7 +454,7 @@ def generate_font_theme(theme_dir, theme_name, fonts):
 
         f.write("\n" + r"\mode<all>")
 
-def generate_outer_theme(theme_dir, theme_name, backgrounds):
+def generate_outer_theme(theme_dir, theme_name, backgrounds, styling_info):
     """Generates the beameroutertheme file."""
     filepath = theme_dir / f"beameroutertheme{theme_name}.sty"
 
@@ -347,23 +484,41 @@ def generate_outer_theme(theme_dir, theme_name, backgrounds):
         else:
             f.write("% No background images found\n")
 
-        # Frame title template
+        # Frame title template - only add colored box if original has footer elements
         f.write("% Frame title\n")
-        f.write(r"\setbeamertemplate{frametitle}{%" + "\n")
-        f.write(r"  \nointerlineskip" + "\n")
-        f.write(r"  \begin{beamercolorbox}[wd=\paperwidth,ht=2.5ex,dp=1.5ex]{frametitle}%" + "\n")
-        f.write(r"    \hspace*{1em}\insertframetitle" + "\n")
-        f.write(r"  \end{beamercolorbox}%" + "\n")
-        f.write(r"}" + "\n\n")
+        if styling_info.get('has_footer_elements', False):
+            f.write("% Original template has decorative footer elements, using styled frametitle\n")
+            f.write(r"\setbeamertemplate{frametitle}{%" + "\n")
+            f.write(r"  \nointerlineskip" + "\n")
+            f.write(r"  \begin{beamercolorbox}[wd=\paperwidth,ht=2.5ex,dp=1.5ex]{frametitle}%" + "\n")
+            f.write(r"    \hspace*{1em}\insertframetitle" + "\n")
+            f.write(r"  \end{beamercolorbox}%" + "\n")
+            f.write(r"}" + "\n\n")
+        else:
+            f.write("% Original template has minimal styling, using simple frametitle\n")
+            f.write(r"\setbeamertemplate{frametitle}{%" + "\n")
+            f.write(r"  \vspace{0.5cm}" + "\n")
+            f.write(r"  \hspace{1em}{\usebeamerfont{frametitle}\insertframetitle}" + "\n")
+            f.write(r"  \vspace{0.2cm}" + "\n")
+            f.write(r"}" + "\n\n")
 
-        # Footline template
-        f.write("% Footline\n")
-        f.write(r"\setbeamertemplate{footline}{%" + "\n")
-        f.write(r"  \begin{beamercolorbox}[wd=\paperwidth,ht=2.5ex,dp=1ex]{frametitle}%" + "\n")
-        f.write(r"    \hfill\usebeamerfont{page number in head/foot}%" + "\n")
-        f.write(r"    \insertframenumber{} / \inserttotalframenumber\hspace*{1em}%" + "\n")
-        f.write(r"  \end{beamercolorbox}%" + "\n")
-        f.write(r"}" + "\n\n")
+        # Footline template - only add if original has footer elements
+        if styling_info.get('has_footer_elements', False):
+            f.write("% Footline (original template has footer elements)\n")
+            f.write(r"\setbeamertemplate{footline}{%" + "\n")
+            if 'background_rect' in styling_info.get('footer_elements', []):
+                f.write(r"  \begin{beamercolorbox}[wd=\paperwidth,ht=2.5ex,dp=1ex]{frametitle}%" + "\n")
+                f.write(r"    \hfill\usebeamerfont{page number in head/foot}%" + "\n")
+                f.write(r"    \insertframenumber{} / \inserttotalframenumber\hspace*{1em}%" + "\n")
+                f.write(r"  \end{beamercolorbox}%" + "\n")
+            else:
+                f.write(r"  \hfill\usebeamerfont{page number in head/foot}%" + "\n")
+                f.write(r"  \insertframenumber{} / \inserttotalframenumber\hspace*{1em}%" + "\n")
+                f.write(r"  \vspace{0.5em}%" + "\n")
+            f.write(r"}" + "\n\n")
+        else:
+            f.write("% No footline (original template has no footer elements)\n")
+            f.write(r"\setbeamertemplate{footline}{}" + "\n\n")
 
         f.write(r"\mode<all>")
 
@@ -469,6 +624,76 @@ def generate_example_file(theme_dir, theme_name, backgrounds, media_files):
 
         f.write(r"\end{document}" + "\n")
 
+def generate_conversion_report(output_dir, colors, fonts, slide_fonts, backgrounds, styling_info):
+    """Generates a conversion report with notes about visual fidelity."""
+    filepath = output_dir / "CONVERSION_NOTES.md"
+    
+    with open(filepath, 'w') as f:
+        f.write("# PowerPoint to Beamer Conversion Report\n\n")
+        f.write("## What Was Successfully Converted\n\n")
+        
+        # Colors
+        f.write(f"### Colors ({len(colors)} found)\n")
+        if colors:
+            for name, hex_val in list(colors.items())[:10]:  # Show first 10
+                f.write(f"- `{name}`: #{hex_val}\n")
+            if len(colors) > 10:
+                f.write(f"- ...and {len(colors) - 10} more colors\n")
+        else:
+            f.write("- No colors extracted\n")
+        f.write("\n")
+        
+        # Fonts
+        f.write(f"### Fonts\n")
+        if fonts:
+            f.write(f"- Theme fonts: {fonts}\n")
+        if slide_fonts:
+            f.write(f"- Fonts used in slides: {', '.join(slide_fonts)}\n")
+        if not fonts and not slide_fonts:
+            f.write("- No fonts detected\n")
+        f.write("\n")
+        
+        # Backgrounds
+        f.write(f"### Background Images ({len(backgrounds)} found)\n")
+        for img_file in backgrounds.keys():
+            f.write(f"- `{img_file}`\n")
+        if not backgrounds:
+            f.write("- No background images found\n")
+        f.write("\n")
+        
+        # Layout
+        f.write("### Layout Elements\n")
+        if styling_info.get('has_footer_elements'):
+            f.write(f"- Footer elements detected: {', '.join(styling_info.get('footer_elements', []))}\n")
+        else:
+            f.write("- No special layout elements detected\n")
+        f.write("\n")
+        
+        # Limitations
+        f.write("## Conversion Limitations\n\n")
+        f.write("### What Cannot Be Converted Automatically\n")
+        f.write("- **Custom vector graphics**: Logo shapes, geometric elements, and custom drawings\n")
+        f.write("- **Complex layouts**: Multi-layer backgrounds, overlapping elements\n")
+        f.write("- **Exact positioning**: PowerPoint positioning differs from LaTeX\n")
+        f.write("- **Animations**: PowerPoint animations are not supported in Beamer\n")
+        f.write("- **Custom fonts**: May not be available on all systems (substitutions provided)\n\n")
+        
+        # Manual adjustments
+        f.write("### Suggested Manual Adjustments\n")
+        f.write("1. **Review colors**: Check if brand colors match your expectations\n")
+        f.write("2. **Customize fonts**: Install corporate fonts or adjust substitutions\n")
+        f.write("3. **Add logos**: Manually add company logos using `\\includegraphics`\n")
+        f.write("4. **Adjust layouts**: Fine-tune positioning for your specific needs\n")
+        f.write("5. **Test backgrounds**: Verify background images display correctly\n\n")
+        
+        # Corporate font guidance
+        if any("GT America" in font for font in slide_fonts):
+            f.write("### GT America Font Detected\n")
+            f.write("The template uses GT America, a corporate font. Consider:\n")
+            f.write("- Installing GT America if available\n")
+            f.write("- Using the Helvetica substitution provided\n")
+            f.write("- Trying alternative fonts like Avenir or Proxima Nova\n\n")
+
 # --- Main Function ---
 
 def main():
@@ -537,9 +762,15 @@ Examples:
         # Parse theme data
         theme_xml_path = temp_path / "ppt" / "theme" / "theme1.xml"
         colors, fonts = parse_theme_xml(theme_xml_path)
+        slide_fonts = extract_fonts_from_slides(temp_path)
         backgrounds = find_background_images(temp_path)
+        styling_info = parse_slide_master_styling(temp_path)
 
-        print(f"Found {len(colors)} colors, {len(fonts)} fonts, {len(backgrounds)} backgrounds")
+        print(f"Found {len(colors)} colors, {len(fonts)} theme fonts, {len(slide_fonts)} slide fonts, {len(backgrounds)} backgrounds")
+        if slide_fonts:
+            print(f"Slide fonts detected: {', '.join(slide_fonts[:5])}" + ("..." if len(slide_fonts) > 5 else ""))
+        if styling_info['has_footer_elements']:
+            print(f"Detected footer elements: {', '.join(styling_info['footer_elements'])}")
 
         # Copy media files
         media_files = []
@@ -557,11 +788,14 @@ Examples:
         # Generate theme files
         print("Generating theme files...")
         generate_color_theme(output_dir, theme_name, colors)
-        generate_font_theme(output_dir, theme_name, fonts)
-        generate_outer_theme(output_dir, theme_name, backgrounds)
+        generate_font_theme(output_dir, theme_name, fonts, slide_fonts)
+        generate_outer_theme(output_dir, theme_name, backgrounds, styling_info)
         generate_inner_theme(output_dir, theme_name)
         generate_main_theme_file(output_dir, theme_name)
         generate_example_file(output_dir, theme_name, backgrounds, media_files)
+        
+        # Generate conversion report
+        generate_conversion_report(output_dir, colors, fonts, slide_fonts, backgrounds, styling_info)
 
     print("\n" + "="*60)
     print("🎉 Beamer Theme Generation Complete!")
