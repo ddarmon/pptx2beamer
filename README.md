@@ -65,6 +65,10 @@ The script creates a theme directory containing:
         multiple sources including explicit fills and positioned graphics.
     -   **Layout Intelligence:** Analyzes slide master structure to detect and
         preserve footer elements, logos, and decorative elements.
+    -   **Frame Title & Subtitle Support:** Generates custom frame templates
+        with integrated title and subtitle rendering that properly maps
+        PowerPoint placeholders to Beamer `\frametitle{}` and
+        `\framesubtitle{}` commands.
 -   **Professional Image Handling:**
     -   Copies all media files with format preservation.
     -   Automatic EMF-to-PDF conversion using `inkscape` for vector graphics.
@@ -86,6 +90,8 @@ The script creates a theme directory containing:
     Avenir, etc.)
 -   **Multiple Layouts:** Handles complex templates with multiple slide layouts
     and backgrounds
+-   **Frame Title & Subtitle Support:** Generates proper frame titles and
+    subtitles by mapping PowerPoint placeholders to Beamer commands
 
 ### ⚠️ **Known Limitations:**
 
